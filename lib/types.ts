@@ -174,3 +174,14 @@ export interface WithdrawalRequest {
   processedAt?: string;
   failureReason?: string;
 }
+export type DeliveryPartnerStatus =
+  | 'offline'
+  | 'available'
+  | 'on_delivery'
+  | 'suspended';
+
+export type RestaurantStatus =
+  | 'pending'
+  | 'approved'
+  | 'suspended';
+}
