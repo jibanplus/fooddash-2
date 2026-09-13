@@ -118,3 +118,20 @@ a[title*="Netlify"] {
   display: none !important;
   visibility: hidden !important;
 }
+
+/* Hide all Netlify / Powered by Netlify badges and injected links. */
+.netlify-badge,
+.netlify-badge-container,
+[data-netlify],
+[data-netlify-badge],
+[id*="netlify" i],
+[class*="netlify" i],
+a[href*="netlify.com" i],
+a[href*="netlify.app" i],
+a[aria-label*="netlify" i],
+a[title*="netlify" i] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
