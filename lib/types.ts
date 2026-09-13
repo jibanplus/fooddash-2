@@ -174,6 +174,7 @@ export interface WithdrawalRequest {
   processedAt?: string;
   failureReason?: string;
 }
+
 export type DeliveryPartnerStatus =
   | 'offline'
   | 'available'
