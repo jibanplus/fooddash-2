@@ -8,32 +8,45 @@ import {
   MapPin,
   User,
   LogOut,
+  Headphones,
+  ClipboardList,
+  Receipt,
 } from 'lucide-react';
 
 import { useCart } from '@/lib/cart-context';
 import { Button } from '@/components/ui/button';
-import { auth } from '@/lib/firebase';
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { supabase } from '@/lib/supabase';
+import { User as SupabaseUser } from '@supabase/supabase-js';
 
 export function SiteHeader({ location }: { location?: string }) {
   const { totalItems, setIsOpen } = useCart();
 
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<SupabaseUser | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    let mounted = true;
+
+    supabase.auth.getUser().then(({ data }) => {
+      if (mounted) {
+        setUser(data.user ?? null);
+      }
     });
 
-    return unsubscribe;
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error(error);
-    }
+    await supabase.auth.signOut();
+    setUser(null);
   };
 
   return (
@@ -41,7 +54,6 @@ export function SiteHeader({ location }: { location?: string }) {
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
 
         <div className="flex items-center gap-6">
-
           <Link href="/" className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <UtensilsCrossed className="h-5 w-5" />
@@ -60,42 +72,69 @@ export function SiteHeader({ location }: { location?: string }) {
               </span>
             </div>
           )}
-
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
 
-          <Button
-            variant="ghost"
-            size="sm"
-            className="relative"
-            onClick={() => setIsOpen(true)}
-          >
-            <ShoppingCart className="h-5 w-5" />
+          {/* Cart — only logged in */}
+          {user && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="relative"
+              onClick={() => setIsOpen(true)}
+            >
+              <ShoppingCart className="h-5 w-5" />
 
-            {totalItems > 0 && (
-              <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
-                {totalItems}
-              </span>
-            )}
-          </Button>
+              {totalItems > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground">
+                  {totalItems}
+                </span>
+              )}
+            </Button>
+          )}
 
-          {user ? (
+          {/* Logged out */}
+          {!user && (
+            <Link href="/auth/signup">
+              <Button variant="outline" size="sm">
+                <User className="mr-1.5 h-4 w-4" />
+                Sign Up
+              </Button>
+            </Link>
+          )}
+
+          {/* Logged in */}
+          {user && (
             <>
               <Link href="/orders/track">
                 <Button variant="ghost" size="sm">
+                  <ClipboardList className="mr-1.5 h-4 w-4" />
                   Orders
                 </Button>
               </Link>
 
-              <div className="hidden text-right sm:block">
-                <p className="text-xs text-muted-foreground">
-                  Logged in
-                </p>
-                <p className="text-sm font-medium">
-                  {user.phoneNumber || 'User'}
-                </p>
-              </div>
+              <Link href="/transactions">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="hidden sm:flex"
+                >
+                  <Receipt className="mr-1.5 h-4 w-4" />
+                  Transactions
+                </Button>
+              </Link>
+
+              <Link href="/support">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="hidden sm:flex"
+                >
+                  <Headphones className="mr-1.5 h-4 w-4" />
+                  Help
+                </Button>
+              </Link>
 
               <Button
                 variant="outline"
@@ -106,13 +145,6 @@ export function SiteHeader({ location }: { location?: string }) {
                 Logout
               </Button>
             </>
-          ) : (
-            <Link href="/auth/signup">
-              <Button variant="outline" size="sm">
-                <User className="mr-1.5 h-4 w-4" />
-                Sign Up
-              </Button>
-            </Link>
           )}
 
         </div>
