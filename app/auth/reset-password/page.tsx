@@ -27,7 +27,7 @@ export default function ResetPasswordPage() {
     const { error } = await supabase.auth.updateUser({ password });
     setLoading(false);
     if (error) return toast.error(error.message);
-    toast.success('Password updated successfully.'); router.push('/');
+    toast.success('Password updated successfully.'); router.push('/auth/login');
   };
   return <div className="flex min-h-screen items-center justify-center bg-secondary/20 px-4"><form onSubmit={submit} className="w-full max-w-md rounded-2xl border bg-card p-8 shadow-lg">
     <div className="mb-6 flex items-center justify-center gap-2"><div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground"><UtensilsCrossed className="h-6 w-6" /></div><span className="text-2xl font-bold">FoodDash</span></div>
