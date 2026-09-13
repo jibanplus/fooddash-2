@@ -1,142 +1,86 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  UtensilsCrossed,
-  Phone,
-  ArrowLeft,
-  Check,
-  ShieldCheck,
-} from 'lucide-react';
+import { UtensilsCrossed, Mail, ArrowLeft, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import Link from 'next/link';
-
-import {
-  RecaptchaVerifier,
-  signInWithPhoneNumber,
-  ConfirmationResult,
-} from 'firebase/auth';
-import { auth } from '@/lib/firebase';
-
-declare global {
-  interface Window {
-    recaptchaVerifier?: RecaptchaVerifier;
-    confirmationResult?: ConfirmationResult;
-  }
-}
+import { supabase } from '@/lib/supabase';
 
 export default function SignupPage() {
   const router = useRouter();
 
-  const [step, setStep] = useState<'phone' | 'otp' | 'success'>('phone');
-  const [phone, setPhone] = useState('');
+  const [step, setStep] = useState<'email' | 'otp' | 'success'>('email');
+  const [email, setEmail] = useState('');
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!window.recaptchaVerifier) {
-      window.recaptchaVerifier = new RecaptchaVerifier(
-        auth,
-        'recaptcha-container',
-        {
-          size: 'invisible',
-          callback: () => {},
-        }
-      );
-    }
-
-    return () => {
-      // Keep verifier available between OTP attempts.
-    };
-  }, []);
-
   const handleSendOtp = async () => {
-    if (!/^\d{10}$/.test(phone)) {
-      toast.error('Please enter a valid 10-digit phone number');
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      toast.error('Please enter a valid email address');
       return;
     }
 
     try {
       setLoading(true);
 
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(
-          auth,
-          'recaptcha-container',
-          {
-            size: 'invisible',
-            callback: () => {},
-          }
-        );
-      }
+      const { error } = await supabase.auth.signInWithOtp({
+        email: cleanEmail,
+        options: {
+          shouldCreateUser: true,
+        },
+      });
 
-      const confirmationResult = await signInWithPhoneNumber(
-        auth,
-        `+91${phone}`,
-        window.recaptchaVerifier
-      );
+      if (error) throw error;
 
-      window.confirmationResult = confirmationResult;
-
+      setEmail(cleanEmail);
       setStep('otp');
-      toast.success('OTP sent to your phone');
+
+      toast.success('OTP sent to your email');
     } catch (error: any) {
       console.error(error);
-
-      toast.error(
-        error?.message || 'Failed to send OTP. Please try again.'
-      );
-
-      if (window.recaptchaVerifier) {
-        try {
-          window.recaptchaVerifier.clear();
-        } catch {}
-        window.recaptchaVerifier = undefined;
-      }
+      toast.error(error?.message || 'Failed to send OTP');
     } finally {
       setLoading(false);
     }
   };
 
   const handleVerifyOtp = async () => {
-    const otpString = otp.join('');
+    const code = otp.join('');
 
-    if (otpString.length !== 6) {
+    if (code.length !== 6) {
       toast.error('Please enter the 6-digit OTP');
-      return;
-    }
-
-    if (!window.confirmationResult) {
-      toast.error('Please request a new OTP');
       return;
     }
 
     try {
       setLoading(true);
 
-      await window.confirmationResult.confirm(otpString);
+      const { error } = await supabase.auth.verifyOtp({
+        email,
+        token: code,
+        type: 'email',
+      });
+
+      if (error) throw error;
 
       setStep('success');
-      toast.success('Account created successfully!');
+      toast.success('Welcome to FoodDash!');
+
+      setTimeout(() => {
+        router.push('/');
+        router.refresh();
+      }, 1200);
     } catch (error: any) {
       console.error(error);
-
-      toast.error(
-        error?.code === 'auth/invalid-verification-code'
-          ? 'Invalid OTP. Please try again.'
-          : error?.message || 'OTP verification failed'
-      );
+      toast.error(error?.message || 'Invalid or expired OTP');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleResendOtp = async () => {
-    setOtp(['', '', '', '', '', '']);
-    await handleSendOtp();
   };
 
   const handleOtpChange = (index: number, value: string) => {
@@ -153,15 +97,16 @@ export default function SignupPage() {
 
   const handleOtpKeyDown = (
     index: number,
-    e: React.KeyboardEvent
+    e: React.KeyboardEvent<HTMLInputElement>
   ) => {
-    if (
-      e.key === 'Backspace' &&
-      !otp[index] &&
-      index > 0
-    ) {
+    if (e.key === 'Backspace' && !otp[index] && index > 0) {
       document.getElementById(`otp-${index - 1}`)?.focus();
     }
+  };
+
+  const handleResendOtp = async () => {
+    setOtp(['', '', '', '', '', '']);
+    await handleSendOtp();
   };
 
   return (
@@ -180,48 +125,36 @@ export default function SignupPage() {
 
         <div className="rounded-2xl border bg-card p-8 shadow-lg animate-slide-up">
 
-          {step === 'phone' && (
+          {step === 'email' && (
             <>
               <div className="mb-6 text-center">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-                  <Phone className="h-7 w-7 text-primary" />
+                  <Mail className="h-7 w-7 text-primary" />
                 </div>
 
                 <h1 className="text-2xl font-bold">
-                  Create your account
+                  Welcome to FoodDash
                 </h1>
 
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Sign up with your phone number to start ordering
+                  Enter your email to create your FoodDash account
                 </p>
               </div>
 
               <div className="space-y-4">
-
                 <div>
                   <label className="mb-1.5 block text-sm font-medium">
-                    Phone Number
+                    Email Address
                   </label>
 
-                  <div className="flex gap-2">
-                    <div className="flex h-11 w-16 items-center justify-center rounded-md border border-input bg-muted text-sm font-medium">
-                      +91
-                    </div>
-
-                    <Input
-                      type="tel"
-                      value={phone}
-                      onChange={(e) =>
-                        setPhone(
-                          e.target.value
-                            .replace(/\D/g, '')
-                            .slice(0, 10)
-                        )
-                      }
-                      placeholder="98765 43210"
-                      className="h-11 flex-1 text-base"
-                    />
-                  </div>
+                  <Input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="h-11 text-base"
+                    autoComplete="email"
+                  />
                 </div>
 
                 <Button
@@ -230,13 +163,12 @@ export default function SignupPage() {
                   onClick={handleSendOtp}
                   disabled={loading}
                 >
-                  {loading ? 'Sending OTP...' : 'Send OTP'}
+                  {loading ? 'Sending OTP...' : 'Continue with Email'}
                 </Button>
-
               </div>
 
               <p className="mt-4 text-center text-xs text-muted-foreground">
-                By signing up you agree to our Terms & Privacy Policy
+                We will send a secure 6-digit verification code to your email.
               </p>
             </>
           )}
@@ -245,15 +177,19 @@ export default function SignupPage() {
             <>
               <div className="mb-6 text-center">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-                  <ShieldCheck className="h-7 w-7 text-primary" />
+                  <Mail className="h-7 w-7 text-primary" />
                 </div>
 
                 <h1 className="text-2xl font-bold">
-                  Verify your number
+                  Verify your email
                 </h1>
 
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Enter the 6-digit code sent to +91 {phone}
+                  Enter the 6-digit code sent to
+                </p>
+
+                <p className="mt-1 text-sm font-medium">
+                  {email}
                 </p>
               </div>
 
@@ -283,38 +219,36 @@ export default function SignupPage() {
                 onClick={handleVerifyOtp}
                 disabled={loading}
               >
-                {loading
-                  ? 'Verifying...'
-                  : 'Verify & Create Account'}
+                {loading ? 'Verifying...' : 'Verify & Create Account'}
               </Button>
 
-              <div className="mt-4 text-center">
-                <button
-                  onClick={handleResendOtp}
-                  disabled={loading}
-                  className="text-sm font-medium text-primary hover:underline disabled:opacity-50"
-                >
-                  Resend OTP
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleResendOtp}
+                disabled={loading}
+                className="mt-4 w-full text-sm font-medium text-primary hover:underline disabled:opacity-50"
+              >
+                Resend OTP
+              </button>
 
               <button
+                type="button"
                 onClick={() => {
-                  setStep('phone');
+                  setStep('email');
                   setOtp(['', '', '', '', '', '']);
                 }}
-                className="mt-2 flex w-full items-center justify-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+                className="mt-3 flex w-full items-center justify-center gap-1 text-sm text-muted-foreground hover:text-foreground"
               >
                 <ArrowLeft className="h-4 w-4" />
-                Change number
+                Change email
               </button>
             </>
           )}
 
           {step === 'success' && (
             <div className="py-6 text-center">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/10">
-                <Check className="h-10 w-10 text-success" />
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
+                <Check className="h-10 w-10 text-green-600" />
               </div>
 
               <h1 className="text-2xl font-bold">
@@ -322,7 +256,7 @@ export default function SignupPage() {
               </h1>
 
               <p className="mt-2 text-sm text-muted-foreground">
-                Your account has been created successfully.
+                Your account is ready. Happy ordering!
               </p>
 
               <Button
@@ -337,15 +271,13 @@ export default function SignupPage() {
 
         </div>
 
-        <div id="recaptcha-container" />
-
         <p className="mt-6 text-center text-sm text-muted-foreground">
           Already have an account?{' '}
           <Link
             href="/"
             className="font-medium text-primary hover:underline"
           >
-            Go to home
+            Go to Home
           </Link>
         </p>
 
