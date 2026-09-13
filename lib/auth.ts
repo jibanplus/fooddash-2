@@ -46,7 +46,16 @@ export async function adminCreateAccount(input: {
   role: UserRole;
   status?: 'active' | 'pending' | 'suspended' | 'inactive';
 }) {
-  const { data, error } = await supabase.functions.invoke('admin-create-user', { body: input });
+  const email = input.email.trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!emailRegex.test(email)) {
+    throw new Error('Please enter a valid email address, for example name@example.com');
+  }
+
+  const { data, error } = await supabase.functions.invoke('admin-create-user', {
+    body: { ...input, email },
+  });
   if (error) throw new Error(error.message || 'Unable to create account');
   if (!data?.ok) throw new Error(data?.error || 'Unable to create account');
   return data;
