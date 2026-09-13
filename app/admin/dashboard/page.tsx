@@ -25,6 +25,7 @@ import { SupportDesk } from '@/components/support-desk';
 import { MenuManager } from '@/components/menu-manager';
 import { getRestaurants, setRestaurants as persistRestaurants, getDeliveryPartners, setDeliveryPartners as persistDeliveryPartners, getOrders, setOrders as persistOrders, getTransactions, subscribeStore, addTransaction } from '@/lib/platform-store';
 import { adminCreateAccount, sendAdminResetEmail } from '@/lib/auth';
+import { supabase } from '@/lib/supabase';
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -94,11 +95,68 @@ export default function AdminDashboard() {
     toast.success('Restaurant suspended');
   };
 
-  const permanentlyDeleteRestaurant = (id: string) => {
-    if (!window.confirm('Permanently delete this restaurant? This cannot be undone.')) return;
-    const next = restaurants.filter(r => r.id !== id);
-    setRestaurantsState(next); persistRestaurants(next);
-    toast.success('Restaurant permanently deleted');
+  const permanentlyDeleteRestaurant = async (id: string) => {
+    const restaurant = restaurants.find((r) => r.id === id);
+    if (!restaurant) return;
+    if (!window.confirm(`Permanently delete ${restaurant.name}? This cannot be undone.`)) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+        body: {
+          user_id: id,
+          email: restaurant.ownerEmail || (restaurant as any).email,
+          partner_type: 'restaurant',
+          partner_id: id,
+        },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || 'Delete failed');
+      const next = restaurants.filter((r) => r.id !== id);
+      setRestaurantsState(next);
+      persistRestaurants(next);
+      toast.success('Restaurant permanently deleted');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete restaurant');
+    }
+  };
+
+  const suspendDeliveryPartner = (id: string) => {
+    const next = deliveryPartners.map((p) => p.id === id ? { ...p, status: 'suspended' as const } : p);
+    setDeliveryPartnersState(next);
+    persistDeliveryPartners(next);
+    setSelectedPartner((p) => p?.id === id ? { ...p, status: 'suspended' } : p);
+    toast.success('Delivery partner suspended');
+  };
+
+  const approveDeliveryPartner = (id: string) => {
+    const next = deliveryPartners.map((p) => p.id === id ? { ...p, status: 'available' as const } : p);
+    setDeliveryPartnersState(next);
+    persistDeliveryPartners(next);
+    setSelectedPartner((p) => p?.id === id ? { ...p, status: 'available' } : p);
+    toast.success('Delivery partner re-approved');
+  };
+
+  const permanentlyDeleteDeliveryPartner = async (id: string) => {
+    const partner = deliveryPartners.find((p) => p.id === id);
+    if (!partner) return;
+    if (!window.confirm(`Permanently delete ${partner.name}? This cannot be undone.`)) return;
+
+    try {
+      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
+        body: { user_id: id, email: partner.email, partner_type: 'delivery', partner_id: id },
+      });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || 'Delete failed');
+      const next = deliveryPartners.filter((p) => p.id !== id);
+      setDeliveryPartnersState(next);
+      persistDeliveryPartners(next);
+      setSelectedPartner((p) => p?.id === id ? null : p);
+      toast.success('Delivery partner permanently deleted');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Failed to delete delivery partner');
+    }
   };
 
   const addDeliveryPartner = () => {
@@ -853,7 +911,12 @@ export default function AdminDashboard() {
                 ))}
               </CardContent>
             </Card>
-            <Card><CardHeader><CardTitle>Restaurant Menu Management</CardTitle></CardHeader><CardContent className="space-y-4">{restaurants.map(r => <MenuManager key={r.id} restaurantId={r.id} admin />)}</CardContent></Card>
+            <Card>
+              <CardHeader><CardTitle>Restaurant Menu Management</CardTitle></CardHeader>
+              <CardContent>
+                <MenuManager restaurants={restaurants.filter((r) => r.status === 'approved')} admin />
+              </CardContent>
+            </Card>
           </TabsContent>
 
           {/* Orders Tab */}
@@ -966,13 +1029,25 @@ export default function AdminDashboard() {
                         )}
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
                       <Badge
-                        variant={p.status === 'available' ? 'default' : p.status === 'on_delivery' ? 'secondary' : 'outline'}
+                        variant={p.status === 'available' ? 'default' : p.status === 'on_delivery' ? 'secondary' : p.status === 'suspended' ? 'destructive' : 'outline'}
                         className="capitalize"
                       >
                         {p.status.replace('_', ' ')}
                       </Badge>
+                      {p.status === 'suspended' ? (
+                        <Button size="sm" onClick={(e) => { e.stopPropagation(); approveDeliveryPartner(p.id); }}>
+                          <CheckCircle2 className="mr-1 h-4 w-4" /> Re-approve
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); suspendDeliveryPartner(p.id); }}>
+                          <XCircle className="mr-1 h-4 w-4" /> Suspend
+                        </Button>
+                      )}
+                      <Button size="sm" variant="destructive" onClick={(e) => { e.stopPropagation(); permanentlyDeleteDeliveryPartner(p.id); }}>
+                        <X className="mr-1 h-4 w-4" /> Permanent Delete
+                      </Button>
                     </div>
                   </div>
                 ))}
