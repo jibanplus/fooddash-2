@@ -25,7 +25,6 @@ import { SupportDesk } from '@/components/support-desk';
 import { MenuManager } from '@/components/menu-manager';
 import { getRestaurants, setRestaurants as persistRestaurants, getDeliveryPartners, setDeliveryPartners as persistDeliveryPartners, getOrders, setOrders as persistOrders, getTransactions, subscribeStore, addTransaction } from '@/lib/platform-store';
 import { adminCreateAccount, sendAdminResetEmail } from '@/lib/auth';
-import { supabase } from '@/lib/supabase';
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -95,68 +94,11 @@ export default function AdminDashboard() {
     toast.success('Restaurant suspended');
   };
 
-  const permanentlyDeleteRestaurant = async (id: string) => {
-    const restaurant = restaurants.find((r) => r.id === id);
-    if (!restaurant) return;
-    if (!window.confirm(`Permanently delete ${restaurant.name}? This cannot be undone.`)) return;
-
-    try {
-      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
-        body: {
-          user_id: id,
-          email: restaurant.ownerEmail || (restaurant as any).email,
-          partner_type: 'restaurant',
-          partner_id: id,
-        },
-      });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error || 'Delete failed');
-      const next = restaurants.filter((r) => r.id !== id);
-      setRestaurantsState(next);
-      persistRestaurants(next);
-      toast.success('Restaurant permanently deleted');
-    } catch (error) {
-      console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete restaurant');
-    }
-  };
-
-  const suspendDeliveryPartner = (id: string) => {
-    const next = deliveryPartners.map((p) => p.id === id ? { ...p, status: 'suspended' as const } : p);
-    setDeliveryPartnersState(next);
-    persistDeliveryPartners(next);
-    setSelectedPartner((p) => p?.id === id ? { ...p, status: 'suspended' } : p);
-    toast.success('Delivery partner suspended');
-  };
-
-  const approveDeliveryPartner = (id: string) => {
-    const next = deliveryPartners.map((p) => p.id === id ? { ...p, status: 'available' as const } : p);
-    setDeliveryPartnersState(next);
-    persistDeliveryPartners(next);
-    setSelectedPartner((p) => p?.id === id ? { ...p, status: 'available' } : p);
-    toast.success('Delivery partner re-approved');
-  };
-
-  const permanentlyDeleteDeliveryPartner = async (id: string) => {
-    const partner = deliveryPartners.find((p) => p.id === id);
-    if (!partner) return;
-    if (!window.confirm(`Permanently delete ${partner.name}? This cannot be undone.`)) return;
-
-    try {
-      const { data, error } = await supabase.functions.invoke('admin-delete-user', {
-        body: { user_id: id, email: partner.email, partner_type: 'delivery', partner_id: id },
-      });
-      if (error) throw error;
-      if (!data?.ok) throw new Error(data?.error || 'Delete failed');
-      const next = deliveryPartners.filter((p) => p.id !== id);
-      setDeliveryPartnersState(next);
-      persistDeliveryPartners(next);
-      setSelectedPartner((p) => p?.id === id ? null : p);
-      toast.success('Delivery partner permanently deleted');
-    } catch (error) {
-      console.error(error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete delivery partner');
-    }
+  const permanentlyDeleteRestaurant = (id: string) => {
+    if (!window.confirm('Permanently delete this restaurant? This cannot be undone.')) return;
+    const next = restaurants.filter(r => r.id !== id);
+    setRestaurantsState(next); persistRestaurants(next);
+    toast.success('Restaurant permanently deleted');
   };
 
   const addDeliveryPartner = () => {
@@ -218,14 +160,20 @@ export default function AdminDashboard() {
   };
 
   const addRestaurantManual = async () => {
-    if (!newRestaurant.name || !newRestaurant.ownerPhone || !newRestaurant.ownerEmail || newRestaurant.password.length < 8) {
+    const ownerEmail = newRestaurant.ownerEmail.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!newRestaurant.name || !newRestaurant.ownerPhone || !ownerEmail || newRestaurant.password.length < 8) {
       toast.error('Please fill required fields and use a password of at least 8 characters');
+      return;
+    }
+    if (!emailRegex.test(ownerEmail)) {
+      toast.error('Please enter a valid email address');
       return;
     }
 
     let authUserId = `r${restaurants.length + 1}`;
     try {
-      const result = await adminCreateAccount({ email: newRestaurant.ownerEmail.trim(), password: newRestaurant.password, name: newRestaurant.ownerName, phone: newRestaurant.ownerPhone, role: 'restaurant', status: 'pending' });
+      const result = await adminCreateAccount({ email: ownerEmail, password: newRestaurant.password, name: newRestaurant.ownerName, phone: newRestaurant.ownerPhone, role: 'restaurant', status: 'pending' });
       authUserId = result.user_id;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not create Supabase account');
@@ -247,7 +195,7 @@ export default function AdminDashboard() {
       commissionRate: newRestaurant.commissionRate,
       ownerName: newRestaurant.ownerName,
       ownerPhone: newRestaurant.ownerPhone,
-      ownerEmail: newRestaurant.ownerEmail,
+      ownerEmail,
       businessLicense: newRestaurant.businessLicense,
       fssaiLicense: newRestaurant.fssaiLicense,
       address: newRestaurant.address,
@@ -260,7 +208,7 @@ export default function AdminDashboard() {
     const newUser: User = {
       id: `u${users.length + 1}`,
       name: newRestaurant.ownerName,
-      email: newRestaurant.ownerEmail,
+      email: ownerEmail,
       phone: newRestaurant.ownerPhone,
       role: 'restaurant' as 'restaurant',
       status: 'pending' as 'pending',
@@ -288,13 +236,19 @@ export default function AdminDashboard() {
   };
 
   const addDeliveryPartnerManual = async () => {
-    if (!newDeliveryPartner.name || !newDeliveryPartner.phone || !newDeliveryPartner.email || newDeliveryPartner.password.length < 8) {
+    const partnerEmail = newDeliveryPartner.email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!newDeliveryPartner.name || !newDeliveryPartner.phone || !partnerEmail || newDeliveryPartner.password.length < 8) {
       toast.error('Please fill required fields and use a password of at least 8 characters');
+      return;
+    }
+    if (!emailRegex.test(partnerEmail)) {
+      toast.error('Please enter a valid email address');
       return;
     }
     let authUserId = `d${deliveryPartners.length + 1}`;
     try {
-      const result = await adminCreateAccount({ email: newDeliveryPartner.email.trim(), password: newDeliveryPartner.password, name: newDeliveryPartner.name, phone: newDeliveryPartner.phone, role: 'delivery', status: 'active' });
+      const result = await adminCreateAccount({ email: partnerEmail, password: newDeliveryPartner.password, name: newDeliveryPartner.name, phone: newDeliveryPartner.phone, role: 'delivery', status: 'active' });
       authUserId = result.user_id;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not create Supabase account');
@@ -305,7 +259,7 @@ export default function AdminDashboard() {
       id: authUserId,
       name: newDeliveryPartner.name,
       phone: newDeliveryPartner.phone,
-      email: newDeliveryPartner.email,
+      email: partnerEmail,
       status: 'available' as 'available',
       totalDeliveries: 0,
       rating: 5.0,
@@ -322,7 +276,7 @@ export default function AdminDashboard() {
     const newUser: User = {
       id: `u${users.length + 1}`,
       name: newDeliveryPartner.name,
-      email: newDeliveryPartner.email,
+      email: partnerEmail,
       phone: newDeliveryPartner.phone,
       role: 'delivery' as 'delivery',
       status: 'active' as 'active',
@@ -911,12 +865,7 @@ export default function AdminDashboard() {
                 ))}
               </CardContent>
             </Card>
-            <Card>
-              <CardHeader><CardTitle>Restaurant Menu Management</CardTitle></CardHeader>
-              <CardContent>
-                <MenuManager restaurants={restaurants.filter((r) => r.status === 'approved')} admin />
-              </CardContent>
-            </Card>
+            <Card><CardHeader><CardTitle>Restaurant Menu Management</CardTitle></CardHeader><CardContent className="space-y-4">{restaurants.map(r => <MenuManager key={r.id} restaurantId={r.id} admin />)}</CardContent></Card>
           </TabsContent>
 
           {/* Orders Tab */}
@@ -1029,25 +978,13 @@ export default function AdminDashboard() {
                         )}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center justify-end gap-2">
+                    <div className="flex items-center gap-2">
                       <Badge
-                        variant={p.status === 'available' ? 'default' : p.status === 'on_delivery' ? 'secondary' : p.status === 'suspended' ? 'destructive' : 'outline'}
+                        variant={p.status === 'available' ? 'default' : p.status === 'on_delivery' ? 'secondary' : 'outline'}
                         className="capitalize"
                       >
                         {p.status.replace('_', ' ')}
                       </Badge>
-                      {p.status === 'suspended' ? (
-                        <Button size="sm" onClick={(e) => { e.stopPropagation(); approveDeliveryPartner(p.id); }}>
-                          <CheckCircle2 className="mr-1 h-4 w-4" /> Re-approve
-                        </Button>
-                      ) : (
-                        <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); suspendDeliveryPartner(p.id); }}>
-                          <XCircle className="mr-1 h-4 w-4" /> Suspend
-                        </Button>
-                      )}
-                      <Button size="sm" variant="destructive" onClick={(e) => { e.stopPropagation(); permanentlyDeleteDeliveryPartner(p.id); }}>
-                        <X className="mr-1 h-4 w-4" /> Permanent Delete
-                      </Button>
                     </div>
                   </div>
                 ))}
