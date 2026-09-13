@@ -1,4 +1,8 @@
-
+export type UserRole =
+  | 'customer'
+  | 'restaurant'
+  | 'delivery'
+  | 'admin';
 
 export type OrderStatus =
   | 'placed'
@@ -9,15 +13,34 @@ export type OrderStatus =
   | 'delivered'
   | 'cancelled';
 
-export type RestaurantStatus = 'pending' | 'approved' | 'suspended';
+export type RestaurantStatus =
+  | 'pending'
+  | 'approved'
+  | 'suspended';
 
-export type DeliveryPartnerStatus = 'offline' | 'available' | 'on_delivery' | 'suspended';
+export type DeliveryPartnerStatus =
+  | 'offline'
+  | 'available'
+  | 'on_delivery'
+  | 'suspended';
 
-export type PayoutStatus = 'pending' | 'processed' | 'paid' | 'failed' | 'reverted';
+export type PayoutStatus =
+  | 'pending'
+  | 'processed'
+  | 'paid'
+  | 'failed'
+  | 'reverted';
 
-export type WithdrawalMethod = 'bank' | 'upi';
+export type WithdrawalMethod =
+  | 'bank'
+  | 'upi';
 
-export type WalletTransactionType = 'credit' | 'debit' | 'withdrawal' | 'refund';
+export type WalletTransactionType =
+  | 'credit'
+  | 'debit'
+  | 'withdrawal'
+  | 'refund'
+  | 'revert';
 
 export interface MenuItem {
   id: string;
@@ -28,7 +51,10 @@ export interface MenuItem {
   category: string;
   isVeg: boolean;
   isBestseller?: boolean;
-  addons?: { name: string; price: number }[];
+  addons?: {
+    name: string;
+    price: number;
+  }[];
   offer?: string;
 }
 
@@ -62,7 +88,10 @@ export interface CartItem {
   id: string;
   menuItem: MenuItem;
   quantity: number;
-  addons: { name: string; price: number }[];
+  addons: {
+    name: string;
+    price: number;
+  }[];
   total: number;
 }
 
@@ -98,7 +127,11 @@ export interface User {
   email: string;
   phone: string;
   role: UserRole;
-  status: 'active' | 'inactive' | 'pending' | 'suspended';
+  status:
+    | 'active'
+    | 'inactive'
+    | 'pending'
+    | 'suspended';
   joinedAt: string;
   lastOrder?: string;
   totalOrders?: number;
@@ -123,6 +156,9 @@ export interface DeliveryPartner {
   upiId?: string;
   documentVerified?: boolean;
   licenseNumber?: string;
+
+  // Supabase Auth user ID
+  user_id?: string;
 }
 
 export interface Payout {
@@ -152,8 +188,13 @@ export interface BankDetails {
 export interface WalletTransaction {
   id: string;
   userId: string;
-  userType: 'restaurant' | 'delivery' | 'customer';
+  userType:
+    | 'restaurant'
+    | 'delivery'
+    | 'customer';
+
   type: WalletTransactionType;
+
   amount: number;
   balance: number;
   description: string;
@@ -164,7 +205,11 @@ export interface WalletTransaction {
 export interface WithdrawalRequest {
   id: string;
   userId: string;
-  userType: 'restaurant' | 'delivery' | 'customer';
+  userType:
+    | 'restaurant'
+    | 'delivery'
+    | 'customer';
+
   amount: number;
   method: WithdrawalMethod;
   bankDetails?: BankDetails;
