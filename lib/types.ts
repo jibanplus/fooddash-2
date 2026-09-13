@@ -1,4 +1,4 @@
-export type UserRole = 'customer' | 'restaurant' | 'delivery' | 'admin';
+
 
 export type OrderStatus =
   | 'placed'
@@ -11,7 +11,7 @@ export type OrderStatus =
 
 export type RestaurantStatus = 'pending' | 'approved' | 'suspended';
 
-export type DeliveryPartnerStatus = 'offline' | 'available' | 'on_delivery';
+export type DeliveryPartnerStatus = 'offline' | 'available' | 'on_delivery' | 'suspended';
 
 export type PayoutStatus = 'pending' | 'processed' | 'paid' | 'failed' | 'reverted';
 
@@ -173,16 +173,4 @@ export interface WithdrawalRequest {
   requestedAt: string;
   processedAt?: string;
   failureReason?: string;
-}
-
-export type DeliveryPartnerStatus =
-  | 'offline'
-  | 'available'
-  | 'on_delivery'
-  | 'suspended';
-
-export type RestaurantStatus =
-  | 'pending'
-  | 'approved'
-  | 'suspended';
 }
