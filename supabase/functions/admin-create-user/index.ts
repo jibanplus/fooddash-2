@@ -1,355 +1,282 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
-const cors = {
+const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers':
-    'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Content-Type': 'application/json',
 };
 
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: corsHeaders,
+  });
+
+const allowedRoles = ['customer', 'restaurant', 'delivery', 'admin'] as const;
+const allowedStatuses = ['active', 'pending', 'suspended', 'inactive'] as const;
+
+type Role = (typeof allowedRoles)[number];
+type Status = (typeof allowedStatuses)[number];
+
+function requiredEnv(name: string): string {
+  const value = Deno.env.get(name)?.trim();
+  if (!value) throw new Error(`${name} is not configured in Supabase Edge Functions`);
+  return value;
+}
+
+function cleanString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 Deno.serve(async (req) => {
-  // CORS
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: cors });
-  }
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  if (req.method !== 'POST') return json({ ok: false, error: 'Method not allowed' }, 405);
+
+  let createdUserId: string | null = null;
+  let adminClient: ReturnType<typeof createClient> | null = null;
 
   try {
-    if (req.method !== 'POST') {
-      throw new Error('Method not allowed');
-    }
+    // 1. Environment
+    const supabaseUrl = requiredEnv('SUPABASE_URL');
+    const anonKey = requiredEnv('SUPABASE_ANON_KEY');
+    const serviceRoleKey = requiredEnv('SUPABASE_SERVICE_ROLE_KEY');
 
-    // --------------------------------------------------
-    // 1. Check logged-in admin
-    // --------------------------------------------------
+    // 2. Require the caller's Supabase access token
     const authHeader = req.headers.get('Authorization');
-
-    if (!authHeader) {
-      throw new Error('Unauthorized');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return json({ ok: false, error: 'Unauthorized' }, 401);
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
-    if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-      throw new Error('Supabase environment variables are missing');
+    const { data: callerData, error: callerError } = await userClient.auth.getUser();
+    if (callerError || !callerData.user) {
+      return json({ ok: false, error: 'Unauthorized' }, 401);
     }
 
-    const userClient = createClient(
-      supabaseUrl,
-      anonKey,
-      {
-        global: {
-          headers: {
-            Authorization: authHeader,
-          },
-        },
-      }
-    );
+    // 3. Service-role client (never expose this key to the browser)
+    adminClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
 
-    const {
-      data: { user: caller },
-      error: callerError,
-    } = await userClient.auth.getUser();
+    // 4. Verify the caller is an admin in the database
+    const { data: roleRow, error: roleError } = await adminClient
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', callerData.user.id)
+      .eq('role', 'admin')
+      .maybeSingle();
 
-    if (callerError || !caller) {
-      throw new Error('Unauthorized');
-    }
+    if (roleError) throw new Error(`Admin role check failed: ${roleError.message}`);
+    if (!roleRow) return json({ ok: false, error: 'Admin access required' }, 403);
 
-    // Service-role client
-    const admin = createClient(
-      supabaseUrl,
-      serviceRoleKey
-    );
-
-    // --------------------------------------------------
-    // 2. Verify caller is Admin
-    // --------------------------------------------------
-    const { data: roleRow, error: roleCheckError } =
-      await admin
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', caller.id)
-        .eq('role', 'admin')
-        .maybeSingle();
-
-    if (roleCheckError) {
-      throw roleCheckError;
-    }
-
-    if (!roleRow) {
-      throw new Error('Admin access required');
-    }
-
-    // --------------------------------------------------
-    // 3. Read request
-    // --------------------------------------------------
+    // 5. Validate request
     const body = await req.json();
-
-    const email = String(body.email || '')
-      .trim()
-      .toLowerCase();
-
-    const password = String(body.password || '');
-
-    const name = String(body.name || '').trim();
-
-    const phone = String(body.phone || '').trim();
-
-    const role = String(body.role || '').trim();
-
-    const status =
-      body.status ||
-      (role === 'restaurant' ? 'pending' : 'active');
+    const email = cleanString(body?.email).toLowerCase();
+    const password = typeof body?.password === 'string' ? body.password : '';
+    const name = cleanString(body?.name);
+    const phone = cleanString(body?.phone);
+    const role = cleanString(body?.role) as Role;
+    const requestedStatus = cleanString(body?.status) as Status;
 
     if (!email || !password || !name) {
-      throw new Error(
-        'Name, email and password are required'
-      );
+      return json({ ok: false, error: 'Name, email and password are required' }, 400);
     }
 
-    if (
-      ![
-        'customer',
-        'restaurant',
-        'delivery',
-        'admin',
-      ].includes(role)
-    ) {
-      throw new Error('Invalid account role');
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return json({ ok: false, error: 'Please enter a valid email address' }, 400);
     }
 
     if (password.length < 8) {
-      throw new Error(
-        'Password must be at least 8 characters'
-      );
+      return json({ ok: false, error: 'Password must be at least 8 characters' }, 400);
     }
 
-    // --------------------------------------------------
-    // 4. Create Supabase Auth user
-    // --------------------------------------------------
-    const {
-      data: created,
-      error: createError,
-    } = await admin.auth.admin.createUser({
+    if (!allowedRoles.includes(role)) {
+      return json({ ok: false, error: 'Invalid account role' }, 400);
+    }
+
+    const status: Status = allowedStatuses.includes(requestedStatus)
+      ? requestedStatus
+      : role === 'restaurant'
+        ? 'pending'
+        : 'active';
+
+    // Restaurants must not be active before admin approval.
+    const profileStatus: Status = role === 'restaurant' ? 'pending' : status;
+
+    // 6. Prevent duplicate email before creating Auth user
+    const { data: existingUsers, error: listError } = await adminClient.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000,
+    });
+
+    if (listError) throw new Error(`Unable to check existing accounts: ${listError.message}`);
+
+    const emailExists = existingUsers.users.some(
+      (u) => (u.email || '').toLowerCase() === email,
+    );
+
+    if (emailExists) {
+      return json({ ok: false, error: 'An account with this email already exists' }, 409);
+    }
+
+    // 7. Create Supabase Auth account
+    const { data: created, error: createError } = await adminClient.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: {
-        name,
-        phone,
-        role,
-      },
+      user_metadata: { name, phone, role },
     });
 
     if (createError || !created.user) {
-      throw createError ||
-        new Error('Auth user creation failed');
+      throw new Error(createError?.message || 'Auth user creation failed');
     }
 
-    const userId = created.user.id;
+    createdUserId = created.user.id;
 
-    // --------------------------------------------------
-    // 5. Create / update profile
-    // IMPORTANT:
-    // Do NOT use upsert/onConflict because the existing
-    // FoodDash DB may not have the expected constraint.
-    // --------------------------------------------------
+    // The database trigger may already have created these rows. Update them instead of
+    // relying on an ON CONFLICT constraint that may differ between projects.
+    const now = new Date().toISOString();
 
-    const {
-      data: existingProfile,
-      error: profileLookupError,
-    } = await admin
+    const { data: existingProfile, error: profileLookupError } = await adminClient
       .from('profiles')
       .select('id')
-      .eq('id', userId)
+      .eq('id', createdUserId)
       .maybeSingle();
 
-    if (profileLookupError) {
-      throw profileLookupError;
-    }
+    if (profileLookupError) throw new Error(`Profile lookup failed: ${profileLookupError.message}`);
+
+    const profileValues = {
+      id: createdUserId,
+      name,
+      email,
+      phone,
+      role,
+      status: profileStatus,
+      updated_at: now,
+    };
 
     if (existingProfile) {
-      const { error } = await admin
+      const { error } = await adminClient
         .from('profiles')
-        .update({
-          email,
-          full_name: name,
-          phone,
-          role,
-          status,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', userId);
-
-      if (error) {
-        throw error;
-      }
+        .update({ name, email, phone, role, status: profileStatus, updated_at: now })
+        .eq('id', createdUserId);
+      if (error) throw new Error(`Profile update failed: ${error.message}`);
     } else {
-      const { error } = await admin
-        .from('profiles')
-        .insert({
-          id: userId,
-          email,
-          full_name: name,
-          phone,
-          role,
-          status,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
-
-      if (error) {
-        throw error;
-      }
+      const { error } = await adminClient.from('profiles').insert({
+        ...profileValues,
+        created_at: now,
+      });
+      if (error) throw new Error(`Profile creation failed: ${error.message}`);
     }
 
-    // --------------------------------------------------
-    // 6. Add user role
-    // IMPORTANT:
-    // No upsert / no onConflict.
-    // --------------------------------------------------
-
-    const {
-      data: existingRole,
-      error: existingRoleError,
-    } = await admin
+    // Role row: the migration uses (user_id, role) as the primary key.
+    const { data: existingRole, error: roleLookupError } = await adminClient
       .from('user_roles')
       .select('user_id')
-      .eq('user_id', userId)
+      .eq('user_id', createdUserId)
       .eq('role', role)
       .maybeSingle();
 
-    if (existingRoleError) {
-      throw existingRoleError;
-    }
+    if (roleLookupError) throw new Error(`Role lookup failed: ${roleLookupError.message}`);
 
     if (!existingRole) {
-      const { error } = await admin
-        .from('user_roles')
-        .insert({
-          user_id: userId,
-          role,
-        });
-
-      if (error) {
-        throw error;
-      }
+      const { error } = await adminClient.from('user_roles').insert({
+        user_id: createdUserId,
+        role,
+      });
+      if (error) throw new Error(`Role creation failed: ${error.message}`);
     }
 
-    // --------------------------------------------------
-    // 7. Restaurant account
-    // --------------------------------------------------
-
+    // 8. Create the partner record
     if (role === 'restaurant') {
-      const {
-        data: existingRestaurant,
-        error: restaurantLookupError,
-      } = await admin
+      const { data: existingRestaurant, error: restaurantLookupError } = await adminClient
         .from('restaurants')
         .select('id')
-        .eq('owner_id', userId)
+        .eq('owner_id', createdUserId)
         .maybeSingle();
 
       if (restaurantLookupError) {
-        throw restaurantLookupError;
+        throw new Error(`Restaurant lookup failed: ${restaurantLookupError.message}`);
       }
 
-      if (!existingRestaurant) {
-        const { error } = await admin
+      if (existingRestaurant) {
+        const { error } = await adminClient
           .from('restaurants')
-          .insert({
-            owner_id: userId,
+          .update({
             owner_email: email,
             name,
-            status:
-              status === 'active'
-                ? 'approved'
-                : 'pending',
-          });
-
-        if (error) {
-          throw error;
-        }
+            status: profileStatus === 'active' ? 'approved' : 'pending',
+            updated_at: now,
+          })
+          .eq('id', existingRestaurant.id);
+        if (error) throw new Error(`Restaurant update failed: ${error.message}`);
+      } else {
+        const { error } = await adminClient.from('restaurants').insert({
+          owner_id: createdUserId,
+          owner_email: email,
+          name,
+          status: profileStatus === 'active' ? 'approved' : 'pending',
+        });
+        if (error) throw new Error(`Restaurant creation failed: ${error.message}`);
       }
     }
 
-    // --------------------------------------------------
-    // 8. Delivery Partner
-    // --------------------------------------------------
-
     if (role === 'delivery') {
-      const {
-        data: existingPartner,
-        error: partnerLookupError,
-      } = await admin
+      const { data: existingPartner, error: partnerLookupError } = await adminClient
         .from('delivery_partners')
         .select('id')
-        .eq('user_id', userId)
+        .eq('user_id', createdUserId)
         .maybeSingle();
 
       if (partnerLookupError) {
-        throw partnerLookupError;
+        throw new Error(`Delivery partner lookup failed: ${partnerLookupError.message}`);
       }
 
-      if (!existingPartner) {
-        const { error } = await admin
+      if (existingPartner) {
+        const { error } = await adminClient
           .from('delivery_partners')
-          .insert({
-            user_id: userId,
-            name,
-            email,
-            phone,
-            status: 'offline',
-          });
-
-        if (error) {
-          throw error;
-        }
+          .update({ name, email, phone, updated_at: now })
+          .eq('id', existingPartner.id);
+        if (error) throw new Error(`Delivery partner update failed: ${error.message}`);
+      } else {
+        const { error } = await adminClient.from('delivery_partners').insert({
+          user_id: createdUserId,
+          name,
+          email,
+          phone,
+          status: 'offline',
+        });
+        if (error) throw new Error(`Delivery partner creation failed: ${error.message}`);
       }
     }
 
-    // --------------------------------------------------
-    // 9. Success
-    // --------------------------------------------------
+    return json({
+      ok: true,
+      user_id: createdUserId,
+      email,
+      role,
+      status: profileStatus,
+      message: 'Account created successfully',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown server error';
 
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        user_id: userId,
-        email,
-        role,
-        message: 'Account created successfully',
-      }),
-      {
-        status: 200,
-        headers: {
-          ...cors,
-          'Content-Type': 'application/json',
-        },
+    // If anything after Auth creation fails, remove the Auth user so we do not leave
+    // a half-created account behind.
+    if (createdUserId && adminClient) {
+      try {
+        await adminClient.auth.admin.deleteUser(createdUserId);
+      } catch (cleanupError) {
+        console.error('Account cleanup failed:', cleanupError);
       }
-    );
-
-  } catch (e) {
-    const message =
-      e instanceof Error
-        ? e.message
-        : 'Unknown error';
+    }
 
     console.error('admin-create-user error:', message);
-
-    return new Response(
-      JSON.stringify({
-        ok: false,
-        error: message,
-      }),
-      {
-        status: 400,
-        headers: {
-          ...cors,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    return json({ ok: false, error: message }, 400);
   }
 });
