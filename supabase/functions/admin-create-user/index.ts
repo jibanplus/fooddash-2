@@ -174,17 +174,29 @@ Deno.serve(async (req) => {
       if (error) throw new Error(`Profile creation failed: ${error.message}`);
     }
 
-    // Role row: the migration uses (user_id, role) as the primary key.
-    const { data: existingRole, error: roleLookupError } = await adminClient
+    // Role row: some projects have a DB trigger that auto-inserts a default
+    // user_roles row (e.g. role='customer') as soon as the Auth user is created.
+    // The primary key on this table may just be `user_id` (not a composite of
+    // user_id+role), so we must look up by user_id ONLY and then update or
+    // insert accordingly — never assume no row exists just because the role
+    // doesn't match yet.
+    const { data: existingRoleRow, error: roleLookupError } = await adminClient
       .from('user_roles')
-      .select('user_id')
+      .select('user_id, role')
       .eq('user_id', createdUserId)
-      .eq('role', role)
       .maybeSingle();
 
     if (roleLookupError) throw new Error(`Role lookup failed: ${roleLookupError.message}`);
 
-    if (!existingRole) {
+    if (existingRoleRow) {
+      if (existingRoleRow.role !== role) {
+        const { error } = await adminClient
+          .from('user_roles')
+          .update({ role })
+          .eq('user_id', createdUserId);
+        if (error) throw new Error(`Role update failed: ${error.message}`);
+      }
+    } else {
       const { error } = await adminClient.from('user_roles').insert({
         user_id: createdUserId,
         role,
